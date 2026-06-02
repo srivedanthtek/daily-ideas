@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "routes": [
+    {
+      "src": "/api/cron/generate-idea",
+      "methods": ["GET", "POST"],
+      "dest": "/api/cron/generate-idea/route.ts"
+    },
+    {
+      "src": "/api/trigger",
+      "methods": ["GET", "POST"],
+      "dest": "/api/trigger/route.ts"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/generate-idea",
+      "schedule": "0 13 * * *"
+    }
+  ],
+  "functions": {
+    "api/**.ts": {
+      "maxDuration": 60
+    }
+  }
+}
