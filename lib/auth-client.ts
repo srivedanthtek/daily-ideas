@@ -1,8 +1,6 @@
-const SPARK_PASSWORD = process.env.NEXT_PUBLIC_SPARK_PASSWORD || process.env.SPARK_PASSWORD || "spark-demo";
+const SPARK_PASSWORD = process.env.SPARK_PASSWORD;
 
 export async function login(password: string): Promise<boolean> {
-  if (password === SPARK_PASSWORD) {
-    return true;
-  }
-  return false;
+  if (!SPARK_PASSWORD) return false;
+  return password === SPARK_PASSWORD;
 }
