@@ -1,6 +1,13 @@
-const SPARK_PASSWORD = process.env.SPARK_PASSWORD;
-
 export async function login(password: string): Promise<boolean> {
-  if (!SPARK_PASSWORD) return false;
-  return password === SPARK_PASSWORD;
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    return false;
+  }
 }
