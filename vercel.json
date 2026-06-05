@@ -17,10 +17,5 @@
       "path": "/api/cron/generate-idea",
       "schedule": "0 13 * * *"
     }
-  ],
-  "functions": {
-    "api/**.ts": {
-      "maxDuration": 60
-    }
-  }
+  ]
 }
