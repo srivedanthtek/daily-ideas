@@ -24,6 +24,7 @@ Thumbs.db
 .env.development
 .env.production
 .env.test
+env-for-vercel
 
 # Logs
 logs
