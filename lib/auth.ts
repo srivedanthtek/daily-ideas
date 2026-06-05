@@ -11,5 +11,10 @@ export async function isAuthenticated(): Promise<boolean> {
 }
 
 export async function logout(): Promise<void> {
-  // handled by setting cookie to empty
+  try {
+    const cookieStore = cookies();
+    cookieStore.set("spark_auth", "", { maxAge: 0, path: "/" });
+  } catch {
+    // ignore
+  }
 }
