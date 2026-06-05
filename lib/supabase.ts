@@ -1,17 +1,17 @@
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!supabaseUrl) {
   throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_URL environment variable.");
 }
-if (!supabaseServiceKey) {
-  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY environment variable.");
+if (!supabaseKey) {
+  throw new Error("Missing Supabase key environment variable (NEXT_PUBLIC_SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY).");
 }
 
-// Create Supabase client without specifying a custom schema (uses default public schema)
-export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+// Create Supabase client (uses anon key by default for client components)
+export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
