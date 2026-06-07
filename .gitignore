@@ -33,3 +33,6 @@ logs
 # Misc
 .idea/
 .vscode/
+
+# Local filesystem fallback (ideas saved when Supabase is unreachable)
+local-fallback/

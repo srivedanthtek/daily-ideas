@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runIdeaGenerationAndEmailPipeline } from "@/lib/claude";
+import { runIdeaGenerationAndEmailPipeline, PipelineResult } from "@/lib/claude";
 
 // Force dynamic execution for API route
 export const dynamic = "force-dynamic";
@@ -18,13 +18,25 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const result = await runIdeaGenerationAndEmailPipeline();
+    const result: PipelineResult = await runIdeaGenerationAndEmailPipeline();
 
     if (!result.success) {
       return NextResponse.json(
         { error: "Generation failed", details: result.error },
         { status: 500 }
       );
+    }
+
+    // If the idea was saved to local filesystem instead of Supabase
+    if (result.fallbackMode) {
+      console.warn("⚠️ Idea saved to local filesystem (Supabase was unreachable):", result.fallbackTitle);
+      return NextResponse.json({
+        message: "Idea generated but saved to local filesystem (Supabase was unreachable).",
+        fallbackMode: true,
+        fallbackFile: result.fallbackFile,
+        fallbackTitle: result.fallbackTitle,
+        warning: "Supabase was unreachable. The idea was saved to local-fallback/ directory. Run replay-fallbacks when Supabase is back up.",
+      });
     }
 
     return NextResponse.json({
