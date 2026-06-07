@@ -1,9 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+export interface GenerationResult {
+  text: string;
+  tokenUsage: { input: number; output: number } | null;
+}
+
 export interface IdeaProvider {
   name: string;
   model: string;
-  generate(prompt: string): Promise<string>;
+  generate(prompt: string): Promise<GenerationResult>;
 }
 
 export class AnthropicProvider implements IdeaProvider {
@@ -16,7 +21,7 @@ export class AnthropicProvider implements IdeaProvider {
     }
   }
 
-  async generate(prompt: string): Promise<string> {
+  async generate(prompt: string): Promise<GenerationResult> {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       throw new Error("Missing ANTHROPIC_API_KEY environment variable.");
@@ -39,7 +44,12 @@ export class AnthropicProvider implements IdeaProvider {
 
     const contentBlock = message.content[0];
     if (contentBlock && contentBlock.type === "text") {
-      return contentBlock.text;
+      return {
+        text: contentBlock.text,
+        tokenUsage: message.usage
+          ? { input: message.usage.input_tokens, output: message.usage.output_tokens }
+          : null,
+      };
     }
     throw new Error("Anthropic response did not contain text.");
   }

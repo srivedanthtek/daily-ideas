@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { IdeaProvider } from "./anthropic";
+import { IdeaProvider, GenerationResult } from "./anthropic";
 
 export class OpenRouterProvider implements IdeaProvider {
   name = "openrouter";
@@ -11,7 +11,7 @@ export class OpenRouterProvider implements IdeaProvider {
     }
   }
 
-  async generate(prompt: string): Promise<string> {
+  async generate(prompt: string): Promise<GenerationResult> {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
       throw new Error("Missing OPENROUTER_API_KEY environment variable.");
@@ -46,6 +46,12 @@ export class OpenRouterProvider implements IdeaProvider {
     if (!content) {
       throw new Error("OpenRouter response did not contain content.");
     }
-    return content;
+
+    return {
+      text: content,
+      tokenUsage: completion.usage
+        ? { input: completion.usage.prompt_tokens, output: completion.usage.completion_tokens }
+        : null,
+    };
   }
 }
