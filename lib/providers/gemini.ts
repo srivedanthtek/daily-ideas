@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { IdeaProvider } from "./anthropic";
+import { IdeaProvider, GenerationResult } from "./anthropic";
 
 export class GeminiProvider implements IdeaProvider {
   name = "gemini";
@@ -11,7 +11,7 @@ export class GeminiProvider implements IdeaProvider {
     }
   }
 
-  async generate(prompt: string): Promise<string> {
+  async generate(prompt: string): Promise<GenerationResult> {
     const apiKey = process.env.GEMENI_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("Missing GEMENI_API_KEY/GEMINI_API_KEY environment variable.");
@@ -36,10 +36,18 @@ export class GeminiProvider implements IdeaProvider {
       },
     });
 
-    const text = result.response.text();
+    const response = result.response;
+    const text = response.text();
     if (!text) {
       throw new Error("Gemini response did not contain text.");
     }
-    return text;
+
+    const usageMetadata = response.usageMetadata;
+    return {
+      text,
+      tokenUsage: usageMetadata
+        ? { input: usageMetadata.promptTokenCount, output: usageMetadata.candidatesTokenCount }
+        : null,
+    };
   }
 }
