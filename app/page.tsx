@@ -2,6 +2,7 @@ import { supabaseServer } from "@/lib/supabase-server";
 import type { Idea } from "@/lib/supabase";
 import { IdeaRenderer } from "@/components/IdeaRenderer";
 import IdeaSidebar from "@/components/IdeaSidebar";
+import IdeaArchiveList from "@/components/IdeaArchiveList";
 import { isAuthenticated } from "@/lib/auth";
 
 export const revalidate = 0; // Fetch latest content always on home
@@ -74,17 +75,41 @@ export default async function Home() {
   const idea: Idea = latestIdeas[0];
 
   // Strip duplicated title/date header from AI-generated content (first line is 📅 YYYY-MM-DD — Title)
-  const bodyContent = idea.content.replace(/^📅\s+\d{4}-\d{2}-\d{2}\s+[—–-]\s+.*(\n|$)/, "").trim();
+  let bodyContent = idea.content.replace(/^📅\s+\d{4}-\d{2}-\d{2}\s+[—–-]\s+.*(\n|$)/, "").trim();
+
+  // Strip Phase 1 Discovery content if the model accidentally outputs it (should be internal only)
+  bodyContent = bodyContent.replace(/## PHASE 1 — DISCOVERY[\s\S]*?## PHASE 2 — OUTPUT\s*/i, "").trim();
+  // Also strip any "Running Phase 1 Discovery..." or "silently working through..." commentary
+  bodyContent = bodyContent.replace(/Running Phase 1 Discovery.*\(silently working through.*?\)/gi, "").trim();
+
+  // Normalize markdown to prevent hydration errors.
+  // ReactMarkdown wraps block-level elements in <p> if they're not separated by blank lines.
+  // This is invalid HTML (<pre>, <table>, <div> inside <p>) and causes hydration failures.
+  // The fixes below only fire when there's a missing blank line — they won't double-space.
+  bodyContent = bodyContent
+    // 1. Blank line before code fences (```) - prevents <pre> inside <p>
+    .replace(/([^\n])\n```/g, "$1\n\n```")
+    // 2. Blank line before table rows (| ... |) - prevents <table> inside <p>
+    //    Only fires when preceding line does NOT end with '|' (avoiding table row chaining)
+    .replace(/([^|\n])\n\|/g, "$1\n\n|")
+    // 3. Blank line before standalone horizontal rules (---, ***, ___) - prevents <hr> inside <p>
+    //    Only matches ---/***/___ on their own line, NOT table separators (|---|---|)
+    .replace(/([^\n])\n(---|\*\*\*|___)\s*\n/g, "$1\n\n$2\n");
 
   // Estimate a realistic reading time based on content length
   const wordCount = bodyContent.split(/\s+/).length;
   const readTime = Math.max(1, Math.round(wordCount / 200));
 
   return (
-    <div className="max-w-[1192px] w-full mx-auto px-6 py-10 lg:py-14">
-      <div className="flex flex-col lg:flex-row gap-16 items-start">
-        {/* Main Article Content Column */}
-        <article className="flex-1 lg:max-w-[720px] space-y-8 animate-fadeIn">
+    <div className="max-w-[1400px] w-full mx-auto py-10 lg:py-14">
+      <div className="flex flex-col lg:flex-row gap-6 xl:gap-8 items-start">
+        {/* Left Sidebar — All Ideas by Date (collapsible, flush to left edge) */}
+        <aside className="w-full lg:w-[260px] shrink-0 hidden lg:block sticky top-28 max-h-[calc(100vh-10rem)] overflow-y-auto pl-4 sm:pl-6">
+          <IdeaArchiveList />
+        </aside>
+
+        {/* Main Article Content Column — flex-1 fills what remains */}
+        <article className="flex-1 min-w-0 max-w-[760px] mx-auto space-y-8 animate-fadeIn px-4 sm:px-0">
           <div className="border-b border-neutral-100 pb-12">
             <div className="flex items-center gap-2 mb-4">
               <p className="text-xs font-bold text-neutral-400 uppercase tracking-widest font-sans">Latest Spark</p>
@@ -108,8 +133,8 @@ export default async function Home() {
           <IdeaRenderer content={bodyContent} isLocked={isLocked} />
         </article>
 
-        {/* Medium-style Staff Picks Sidebar */}
-        <aside className="w-full lg:w-[320px] shrink-0 border-t lg:border-t-0 lg:border-l border-neutral-100 pt-10 lg:pt-0 lg:pl-8 sticky top-28">
+        {/* Right Sidebar — Staff Picks (thinner, pushed right) */}
+        <aside className="w-full lg:w-[280px] shrink-0 hidden lg:block sticky top-28">
           <IdeaSidebar />
         </aside>
       </div>
