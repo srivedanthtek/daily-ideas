@@ -82,6 +82,41 @@ function getFallbackOrder(): ModelConfig[] {
 }
 
 /**
+ * Normalizes a title string for hashing.
+ * Strips special chars, emoji, lowercases, and trims whitespace.
+ */
+export function normalizeForHash(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "") // remove punctuation, emoji, special chars
+    .replace(/\s+/g, " ")    // collapse whitespace
+    .trim();
+}
+
+/**
+ * Computes a SHA-256 hex hash of a string using the Web Crypto API.
+ * Falls back to a simple string hash if crypto is unavailable.
+ */
+export async function computeHash(input: string): Promise<string> {
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(input);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    // Fallback: simple hash for environments without Web Crypto
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+      const char = input.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(16);
+  }
+}
+
+/**
  * Attempts to parse the title and date from generated content.
  */
 function parseTitleAndDate(content: string): { title: string; dateLabel: string } {
@@ -117,7 +152,46 @@ function parseTitleAndDate(content: string): { title: string; dateLabel: string 
 }
 
 /**
- * Saves a successfully generated idea to Supabase.
+ * Fetches recent ideas (last 30 or 30 days) to build an avoid list for regeneration.
+ */
+async function fetchRecentTitles(): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("ideas")
+    .select("title")
+    .order("created_at", { ascending: false })
+    .limit(30);
+
+  if (error || !data) {
+    console.warn("Failed to fetch recent ideas for avoid list:", error?.message);
+    return [];
+  }
+
+  return data.map((row) => row.title).filter(Boolean);
+}
+
+/**
+ * Checks if a generated title's hash already exists in the database.
+ */
+async function isDuplicateTitle(title: string): Promise<boolean> {
+  const normalized = normalizeForHash(title);
+  const hash = await computeHash(normalized);
+
+  const { data, error } = await supabase
+    .from("ideas")
+    .select("id")
+    .eq("content_hash", hash)
+    .limit(1);
+
+  if (error) {
+    console.warn("Failed to check for duplicate title:", error.message);
+    return false;
+  }
+
+  return data !== null && data.length > 0;
+}
+
+/**
+ * Saves a successfully generated idea to Supabase with a content hash.
  */
 async function saveIdea(
   content: string,
@@ -125,6 +199,8 @@ async function saveIdea(
   modelLabel: string
 ): Promise<Idea | null> {
   const { title, dateLabel } = parseTitleAndDate(content);
+  const normalized = normalizeForHash(title);
+  const contentHash = await computeHash(normalized);
 
   const { data: newIdea, error: insertError } = await supabase
     .from("ideas")
@@ -135,6 +211,7 @@ async function saveIdea(
       provider,
       model_label: modelLabel,
       sent_email: false,
+      content_hash: contentHash,
     })
     .select()
     .single();
@@ -166,6 +243,37 @@ async function sendAndMarkEmail(savedIdea: Idea): Promise<void> {
   }
 }
 
+/**
+ * Attempts to generate content by trying fallback providers in order.
+ * Returns { content, provider, modelLabel } or null if all fail.
+ */
+async function generateWithFallback(prompt: string): Promise<{ content: string; provider: string; modelLabel: string } | null> {
+  const fallbackOrder = getFallbackOrder();
+  console.log(`Fallback provider order: ${fallbackOrder.map((m) => m.label).join(" → ")}`);
+
+  for (const modelConfig of fallbackOrder) {
+    console.log(`Attempting generation with ${modelConfig.provider} (${modelConfig.label})...`);
+
+    try {
+      const result = await generateIdea(modelConfig, prompt);
+      console.log(`Successfully generated idea with ${modelConfig.provider} (latency: ${result.latencyMs}ms)`);
+      return { content: result.text, provider: modelConfig.provider, modelLabel: modelConfig.label };
+    } catch (attemptError: any) {
+      console.warn(
+        `${modelConfig.provider} (${modelConfig.label}) failed: ${attemptError?.message || attemptError}. Trying next provider...`
+      );
+      // Continue to next provider in the fallback chain
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Maximum number of regeneration attempts to find a unique idea.
+ */
+const MAX_DEDUP_RETRIES = 3;
+
 export async function runIdeaGenerationAndEmailPipeline(): Promise<{ success: boolean; idea?: Idea; error?: string }> {
   try {
     // 0. Verify the ideas table exists (simple sanity check)
@@ -175,47 +283,61 @@ export async function runIdeaGenerationAndEmailPipeline(): Promise<{ success: bo
       return { success: false, error: "Supabase table 'ideas' does not exist or is inaccessible" };
     }
 
-    // 1. Read fallback order from config (env var or hardcoded default)
-    const fallbackOrder = getFallbackOrder();
-    console.log(`Fallback provider order: ${fallbackOrder.map((m) => m.label).join(" → ")}`);
+    // 1. Generate with dedup circuit — retry up to MAX_DEDUP_RETRIES times
+    let attempt = 0;
+    let savedIdea: Idea | null = null;
 
-    // 2. Try providers in strict order, falling through on failure
-    let content: string | null = null;
-    let usedProvider: string = "";
-    let usedModelLabel: string = "";
+    while (attempt <= MAX_DEDUP_RETRIES && !savedIdea) {
+      let prompt = CLAUDE_SYSTEM_PROMPT;
 
-    for (const modelConfig of fallbackOrder) {
-      console.log(`Attempting generation with ${modelConfig.provider} (${modelConfig.label})...`);
+      // On retry 1+, inject avoid list of recent titles
+      if (attempt > 0) {
+        const recentTitles = await fetchRecentTitles();
+        if (recentTitles.length > 0) {
+          const avoidList = recentTitles
+            .map((t) => `- ${t}`)
+            .join("\n");
+          prompt +=
+            `\n\nPreviously generated ideas — DO NOT reuse any of these product names or concepts. Generate something completely different:\n${avoidList}`;
+          console.log(`Retry ${attempt}: injecting ${recentTitles.length} existing titles into prompt to avoid duplicates.`);
+        }
+      }
 
-      try {
-        const result = await generateIdea(modelConfig, CLAUDE_SYSTEM_PROMPT);
-        content = result.text;
-        usedProvider = modelConfig.provider;
-        usedModelLabel = modelConfig.label;
-        console.log(`Successfully generated idea with ${modelConfig.provider} (latency: ${result.latencyMs}ms)`);
-        break;
-      } catch (attemptError: any) {
-        console.warn(
-          `${modelConfig.provider} (${modelConfig.label}) failed: ${attemptError?.message || attemptError}. Trying next provider...`
-        );
-        // Continue to next provider in the fallback chain
+      // 2. Generate content using fallback providers
+      const result = await generateWithFallback(prompt);
+      if (!result) {
+        return {
+          success: false,
+          error: "All providers failed to generate an idea. Check generation_logs in Supabase for details.",
+        };
+      }
+
+      const { title } = parseTitleAndDate(result.content);
+
+      // 3. Check if this title is a duplicate (hash lookup against all history)
+      const duplicate = await isDuplicateTitle(title);
+
+      if (duplicate) {
+        console.warn(`Duplicate detected: "${title}" already exists. Re-generating... (attempt ${attempt + 1}/${MAX_DEDUP_RETRIES})`);
+        attempt++;
+        continue;
+      }
+
+      // 4. Unique! Save the idea
+      savedIdea = await saveIdea(result.content, result.provider, result.modelLabel);
+      if (!savedIdea) {
+        return { success: false, error: "Failed to save idea to Supabase after successful generation" };
       }
     }
 
-    if (!content) {
+    if (!savedIdea) {
       return {
         success: false,
-        error: "All providers failed to generate an idea. Check generation_logs in Supabase for details.",
+        error: `Failed to generate a unique idea after ${MAX_DEDUP_RETRIES + 1} attempts. Too many duplicates detected.`,
       };
     }
 
-    // 3. Save the new idea to Supabase
-    const savedIdea = await saveIdea(content, usedProvider, usedModelLabel);
-    if (!savedIdea) {
-      return { success: false, error: "Failed to save idea to Supabase after successful generation" };
-    }
-
-    // 4. Send the notification email
+    // 5. Send the notification email
     await sendAndMarkEmail(savedIdea);
 
     return { success: true, idea: savedIdea };
